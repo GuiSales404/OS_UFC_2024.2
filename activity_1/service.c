@@ -77,43 +77,40 @@ int ler_demanda() {
 
 // Thread 1 - Atendente
 void *atendimento(void *args) {
-    long ultimo_analista = 0;
     pid_t pid_analista = *((pid_t *)args);
 
     while (1) {
         printf("SERVICE: Atendimento: Aguardando cliente...\n");
-        sem_wait(&sem_clientes); // Parando aqui 
+        sem_wait(&sem_clientes); // Espera até que haja clientes na fila
 
         printf("SERVICE: Atendimento: Aguardando liberação da fila\n");
         sem_wait(&sem_fila);
 
-        Cliente cliente = remove_fila();
+        Cliente cliente = remove_fila(); // Remove o cliente da fila
         printf("SERVICE: Atendimento: Cliente %d removido da fila\n", cliente.pid);
         sem_post(&sem_fila);
 
-        sem_wait(sem_atend);
-        sem_wait(sem_block);
+        sem_wait(sem_atend); // Sincronização de atendimento
+        sem_wait(sem_block); // Bloqueia o acesso ao arquivo
 
         long tempo_atual = timestamp_ms();
         int satisfeito = (tempo_atual - cliente.chegada) <= cliente.tempo_para_atendimento;
 
+        // Escreve os dados do cliente no arquivo
         FILE *arquivo = fopen(LNG_FILE, "a");
         if (arquivo != NULL) {
             fprintf(arquivo, "------------------- Cliente %d, Satisfeito: %d\n", cliente.pid, satisfeito);
             fclose(arquivo);
         }
 
-        sem_post(sem_block);
+        sem_post(sem_block); // Libera o acesso ao arquivo
         printf("SERVICE: Atendimento do cliente %d concluído.\n", cliente.pid);
-        // Verifica se já passaram 500ms desde a última vez que o analista foi acordado
-        if (timestamp_ms() - ultimo_analista >= 500) {
-            printf("SERVICE: Atendimento: Acordando analista de PID: %d...\n", pid_analista);
-            sem_post(sem_analyst_ready);
-            kill(pid_analista, SIGCONT); // Envia sinal para o analista
-            printf("SERVICE: Atendimento: Enviando sinal SIGCONT para analista de PID %d\n", pid_analista);
 
-            ultimo_analista = timestamp_ms(); // Atualiza o momento do último acionamento
-        }
+        // Acorda o analista imediatamente após concluir o atendimento
+        printf("SERVICE: Atendimento: Acordando analista de PID: %d...\n", pid_analista);
+        sem_post(sem_analyst_ready); // Libera o analista
+        kill(pid_analista, SIGCONT); // Envia o sinal SIGCONT para o analista
+        printf("SERVICE: Atendimento: Enviando sinal SIGCONT para analista de PID %d\n", pid_analista);
     }
 }
 
