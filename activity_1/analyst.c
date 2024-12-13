@@ -8,6 +8,10 @@
 
 #define LNG_FILE "LNG.txt"
 
+sem_t *sem_analyst_ready;
+sem_t *sem_atend;
+
+
 void process_lng_file() {
     FILE *file = fopen(LNG_FILE, "r+"); // Abre o arquivo para leitura e escrita
     if (file == NULL) {
@@ -39,12 +43,22 @@ void process_lng_file() {
     fclose(file);
 }
 
+void handle_signal(int signal) {
+    if (signal == SIGCONT) {
+        printf("Analista: Recebi sinal SIGCONT e estou acordando.\n");
+    }
+}
+
 int main() {
+    sem_analyst_ready = sem_open("/sem_analyst_ready", O_CREAT, 0644, 0);
+    sem_atend = sem_open("/sem_atend", O_CREAT, 0644, 0);
+
+    signal(SIGCONT, handle_signal);
     // Escreve o PID do processo analista
-    printf("Processo Analista iniciado. PID: %d\n", getpid());
+    printf("ANALYST: Processo Analista iniciado. PID: %d\n", getpid());
 
     // Cria ou abre o semáforo \sem_block
-    sem_t *sem_block = sem_open("sem_block", O_CREAT, 0644, 1);
+    sem_t *sem_block = sem_open("/sem_block", O_CREAT, 0644, 1);
     if (sem_block == SEM_FAILED) {
         perror("Erro ao criar o semáforo sem_block");
         exit(1);
@@ -53,7 +67,9 @@ int main() {
     while (1) {
         // Dorme até ser acordado
         printf("Analista dormindo...\n");
-        pause(); // Espera por um sinal
+        sem_post(sem_analyst_ready);
+        pause();
+        printf("Analista recebeu um sinal. Desbloqueando...\n");
 
         printf("Antes de bloquear sem_block\n");
         sem_wait(sem_block);
@@ -67,11 +83,14 @@ int main() {
 
         // Volta a dormir
         printf("Analista voltou a dormir...\n");
+        sem_post(sem_atend);
     }
 
     // Fecha e remove o semáforo (nunca será alcançado neste caso)
     sem_close(sem_block);
-    sem_unlink("sem_block");
+    sem_unlink("/sem_block");
+    sem_close(sem_analyst_ready);
+    sem_unlink("/sem_analyst_ready");
 
     return 0;
 }

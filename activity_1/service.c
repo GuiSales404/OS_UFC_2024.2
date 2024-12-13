@@ -13,8 +13,8 @@
 #define LNG_FILE "LNG.txt"
 #define SEM_BLOCK_NAME "/sem_block"
 
-pid_t pid_analista;
-long ultimo_analista = 0;
+
+sem_t *sem_analyst_ready;
 
 // Estrutura para representar um cliente
 typedef struct {
@@ -77,17 +77,20 @@ int ler_demanda() {
 
 // Thread 1 - Atendente
 void *atendimento(void *args) {
+    long ultimo_analista = 0;
+    pid_t pid_analista = *((pid_t *)args);
+
     while (1) {
+        printf("SERVICE: Aguardando cliente...\n");
         sem_wait(&sem_clientes);
 
         sem_wait(&sem_fila);
 
-        printf("Atendendo cliente...\n");
         Cliente cliente = remove_fila();
         sem_post(&sem_fila);
 
         kill(cliente.pid, SIGCONT);
-
+        printf("SERVICE: Sinal enviado para cliente PID %d continuar\n", cliente.pid);
         sem_wait(sem_atend);
         sem_wait(sem_block);
 
@@ -96,17 +99,20 @@ void *atendimento(void *args) {
 
         FILE *arquivo = fopen(LNG_FILE, "a");
         if (arquivo != NULL) {
-            fprintf(arquivo, "Cliente %d, Satisfeito: %d\n", cliente.pid, satisfeito);
+            fprintf(arquivo, "------------------- Cliente %d, Satisfeito: %d\n", cliente.pid, satisfeito);
             fclose(arquivo);
         }
 
         sem_post(sem_block);
-        printf("Atendimento do cliente %d concluído.\n", cliente.pid);
+        printf("SERVICE: Atendimento do cliente %d concluído.\n", cliente.pid);
         
         // Verifica se já passaram 500ms desde a última vez que o analista foi acordado
         if (timestamp_ms() - ultimo_analista >= 500) {
-            printf("Acordando analista...\n");
+            printf("SERVICE: Acordando analista de PID: %d...\n", pid_analista);
+            sem_wait(sem_analyst_ready);
             kill(pid_analista, SIGCONT); // Envia sinal para o analista
+            printf("SERVICE: Enviando sinal SIGCONT para analista de PID %d\n", pid_analista);
+
             ultimo_analista = timestamp_ms(); // Atualiza o momento do último acionamento
         }
     }
@@ -152,9 +158,18 @@ void *recepcao(void *args) {
             sem_wait(sem_atend);
             printf("Recepção: Semáforo \\sem_atend liberado\n");
 
+            sem_t *sem_demanda = sem_open("/sem_demanda", O_CREAT, 0644, 0);
+            if (sem_demanda == SEM_FAILED) {
+                perror("Service: Erro ao abrir semáforo /sem_demanda");
+                exit(1);
+            }
+
             int tempo_demanda = ler_demanda();
             printf("Recepção: Tempo lido do arquivo demanda.txt: %d\n", tempo_demanda);
             
+
+            sem_close(sem_demanda);
+
             Cliente cliente;
             cliente.pid = pid;
             cliente.chegada = timestamp_ms();
@@ -174,13 +189,14 @@ void *recepcao(void *args) {
 }
 
 // Processo Analista
-void start_analista() {
+pid_t start_analista() {
     pid_t pid = fork();
     if (pid == 0) {
-        execl("./analista", "./analista", NULL);
+        execl("./analyst", "./analyst", NULL);
         perror("Erro ao executar analista");
         exit(1);
     }
+    return pid;
 }
 
 int main(int argc, char *argv[]) {
@@ -198,14 +214,15 @@ int main(int argc, char *argv[]) {
     sem_init(&sem_clientes, 0, 0);
     sem_atend = sem_open("/sem_atend", O_CREAT, 0644, 1);
     sem_block = sem_open(SEM_BLOCK_NAME, O_CREAT, 0644, 1);
+    sem_analyst_ready = sem_open("/sem_analyst_ready", O_CREAT, 0644, 0);
 
     // Criar o processo Analista
-    start_analista();
+    pid_t pid_analista = start_analista();
 
     // Criar threads
     pthread_t th_recepcao, th_atendimento;
     pthread_create(&th_recepcao, NULL, recepcao, &N);
-    pthread_create(&th_atendimento, NULL, atendimento, NULL);
+    pthread_create(&th_atendimento, NULL, atendimento, &pid_analista);
 
     // Aguardar threads
     pthread_join(th_recepcao, NULL);
@@ -218,6 +235,13 @@ int main(int argc, char *argv[]) {
     sem_close(sem_atend);
     sem_close(sem_block);
     sem_unlink(SEM_BLOCK_NAME);
+    sem_unlink("/sem_demanda");
+    sem_close(sem_analyst_ready);
+    sem_unlink("/sem_analyst_ready");
+
+
+    kill(pid_analista, SIGTERM); // Envia um sinal para terminar o analista
+    waitpid(pid_analista, NULL, 0); // Aguarda o processo analista finalizar
 
     return 0;
 }

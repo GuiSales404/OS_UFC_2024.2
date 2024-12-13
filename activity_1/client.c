@@ -31,10 +31,11 @@ int main()
         perror("Cliente: Erro ao criar demanda.txt");
         exit(1);
     }
+
     fprintf(demanda, "%d", tempo);
     fclose(demanda);
     printf("Cliente: Arquivo demanda.txt criado\n");
-
+    
     // Libera o semáforo \sem_atend
     sem_post(sem);
     printf("Cliente: Semáforo \\sem_atend liberado\n");
