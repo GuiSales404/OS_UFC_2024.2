@@ -62,7 +62,7 @@ int ler_demanda() {
 
     FILE *arquivo = fopen("demanda.txt", "r");
     if (arquivo == NULL) {
-        perror("Erro ao abrir demanda.txt");
+        perror("SERVICE: Erro ao abrir demanda.txt");
         exit(1); // Encerra o programa em caso de erro
     }
 
@@ -81,16 +81,16 @@ void *atendimento(void *args) {
     pid_t pid_analista = *((pid_t *)args);
 
     while (1) {
-        printf("SERVICE: Aguardando cliente...\n");
-        sem_wait(&sem_clientes);
+        printf("SERVICE: Atendimento: Aguardando cliente...\n");
+        sem_wait(&sem_clientes); // Parando aqui 
 
+        printf("SERVICE: Atendimento: Aguardando liberação da fila\n");
         sem_wait(&sem_fila);
 
         Cliente cliente = remove_fila();
+        printf("SERVICE: Atendimento: Cliente %d removido da fila\n", cliente.pid);
         sem_post(&sem_fila);
 
-        kill(cliente.pid, SIGCONT);
-        printf("SERVICE: Sinal enviado para cliente PID %d continuar\n", cliente.pid);
         sem_wait(sem_atend);
         sem_wait(sem_block);
 
@@ -105,38 +105,25 @@ void *atendimento(void *args) {
 
         sem_post(sem_block);
         printf("SERVICE: Atendimento do cliente %d concluído.\n", cliente.pid);
-        
         // Verifica se já passaram 500ms desde a última vez que o analista foi acordado
         if (timestamp_ms() - ultimo_analista >= 500) {
-            printf("SERVICE: Acordando analista de PID: %d...\n", pid_analista);
-            sem_wait(sem_analyst_ready);
+            printf("SERVICE: Atendimento: Acordando analista de PID: %d...\n", pid_analista);
+            sem_post(sem_analyst_ready);
             kill(pid_analista, SIGCONT); // Envia sinal para o analista
-            printf("SERVICE: Enviando sinal SIGCONT para analista de PID %d\n", pid_analista);
+            printf("SERVICE: Atendimento: Enviando sinal SIGCONT para analista de PID %d\n", pid_analista);
 
             ultimo_analista = timestamp_ms(); // Atualiza o momento do último acionamento
         }
     }
 }
 
-void salvar_fila(const char *filename) {
-    FILE *arquivo = fopen(filename, "w");
-    if (arquivo == NULL) {
-        perror("Erro ao abrir arquivo para salvar a fila");
-        return;
+void inspecionar_semaforo(sem_t *sem, const char *nome) {
+    int valor;
+    if (sem_getvalue(sem, &valor) == 0) {
+        printf("Semáforo %s está com valor: %d\n", nome, valor);
+    } else {
+        perror("Erro ao consultar semáforo");
     }
-
-    sem_wait(&sem_fila); // Garante acesso exclusivo à fila
-    int pos = inicio;
-    for (int i = 0; i < tamanho; i++) {
-        Cliente cliente = fila[pos];
-        fprintf(arquivo, "Cliente PID: %d, Chegada: %ld, Prioridade: %d, Tempo para Atendimento: %ld\n",
-                cliente.pid, cliente.chegada, cliente.prioridade, cliente.tempo_para_atendimento);
-        pos = (pos + 1) % TAM_FILA;
-    }
-    sem_post(&sem_fila); // Libera o acesso à fila
-
-    fclose(arquivo);
-    printf("Fila salva no arquivo: %s\n", filename);
 }
 
 // Thread 2 - Recepção
@@ -144,31 +131,40 @@ void *recepcao(void *args) {
     int N = *((int *)args);
     int count = 0;
 
+    printf("SERVICE: Recepção: Criando semáforo /sem_atend\n");
+    sem_atend = sem_open("/sem_atend", O_CREAT, 0644, 0);
+    if (sem_atend == SEM_FAILED) {
+        perror("Erro ao criar semáforo /sem_atend");
+        exit(1);
+    }
+
+    printf("SERVICE: Recepção: Criando semáforo /sem_block\n");
+    sem_block = sem_open("/sem_block", O_CREAT, 0644, 1);
+    if (sem_block == SEM_FAILED) {
+        perror("Erro ao criar semáforo /sem_block");
+        exit(1);
+    }
     while (N == 0 || count < N) {
+        printf("SERVICE: Recepção: Aguardando semáforo /sem_espaco\n");
         sem_wait(&sem_espaco);
+        printf("SERVICE: Recepção:  Semáforo /sem_espaco informa que tem espaço\n");
 
         pid_t pid = fork();
-        printf("Cliente %d criado com PID: %d\n", count, pid);
+        if (pid > 0) {
+            printf("SERVICE: Recepção: Cliente %d criado com PID: %d\n", count+1, pid);
+        }
         if (pid == 0) {
             execl("./client", "./client", NULL);
             perror("Erro ao executar client");
             exit(1);
         } else if (pid > 0) {
-            printf("Recepção: Esperando semáforo \\sem_atend\n");
-            sem_wait(sem_atend);
-            printf("Recepção: Semáforo \\sem_atend liberado\n");
-
-            sem_t *sem_demanda = sem_open("/sem_demanda", O_CREAT, 0644, 0);
-            if (sem_demanda == SEM_FAILED) {
-                perror("Service: Erro ao abrir semáforo /sem_demanda");
-                exit(1);
-            }
+            
+            printf("SERVICE: Recepção: Esperando semáforo /sem_atend\n");
+            sem_wait(sem_atend); 
+            printf("SERVICE: Recepção: Semáforo /sem_atend liberado\n");
 
             int tempo_demanda = ler_demanda();
             printf("Recepção: Tempo lido do arquivo demanda.txt: %d\n", tempo_demanda);
-            
-
-            sem_close(sem_demanda);
 
             Cliente cliente;
             cliente.pid = pid;
@@ -184,7 +180,6 @@ void *recepcao(void *args) {
             count++;
         }
     }
-    salvar_fila("fila_final.txt");
     pthread_exit(NULL);
 }
 
@@ -208,12 +203,19 @@ int main(int argc, char *argv[]) {
     int N = atoi(argv[1]);
     srand(time(NULL));
 
+    // Remover semáforos antigos
+    sem_unlink("/sem_atend");
+    sem_unlink("/sem_block");
+    sem_unlink("/sem_analyst_ready");
+
+    // Limpar arquivos
+    FILE *file = fopen(LNG_FILE, "w");
+    if (file) fclose(file);
+
     // Inicializar Semáforos
     sem_init(&sem_fila, 0, 1);
     sem_init(&sem_espaco, 0, TAM_FILA);
     sem_init(&sem_clientes, 0, 0);
-    sem_atend = sem_open("/sem_atend", O_CREAT, 0644, 1);
-    sem_block = sem_open(SEM_BLOCK_NAME, O_CREAT, 0644, 1);
     sem_analyst_ready = sem_open("/sem_analyst_ready", O_CREAT, 0644, 0);
 
     // Criar o processo Analista
@@ -234,11 +236,9 @@ int main(int argc, char *argv[]) {
     sem_destroy(&sem_clientes);
     sem_close(sem_atend);
     sem_close(sem_block);
-    sem_unlink(SEM_BLOCK_NAME);
-    sem_unlink("/sem_demanda");
+    sem_unlink("/sem_block");
     sem_close(sem_analyst_ready);
     sem_unlink("/sem_analyst_ready");
-
 
     kill(pid_analista, SIGTERM); // Envia um sinal para terminar o analista
     waitpid(pid_analista, NULL, 0); // Aguarda o processo analista finalizar
