@@ -9,10 +9,16 @@
 #include <string.h>
 #include <fcntl.h>
 
-#define TAM_FILA 100
+#define TAM_FILA 1000
 #define LNG_FILE "LNG.txt"
 #define SEM_BLOCK_NAME "/sem_block"
 
+// Variáveis globais para métricas
+int total_clientes = 0;
+int clientes_satisfeitos = 0;
+int clientes_insatisfeitos = 0;
+long inicio_execucao;
+sem_t sem_metrics; // Semáforo para proteger acesso às métricas
 
 sem_t *sem_analyst_ready;
 
@@ -60,11 +66,12 @@ int ler_demanda() {
     // Aguarda o semáforo \sem_atend antes de acessar o arquivo
     // sem_wait(sem); 
 
-    FILE *arquivo = fopen("demanda.txt", "r");
-    if (arquivo == NULL) {
-        perror("SERVICE: Erro ao abrir demanda.txt");
-        exit(1); // Encerra o programa em caso de erro
+    FILE *arquivo;
+    while ((arquivo = fopen("demanda.txt", "r")) == NULL) {
+        printf("SERVICE: Arquivo demanda.txt não encontrado. Tentando novamente em 1 segundo...\n");
+        sleep(0.8); // Espera por 1 segundo antes de tentar novamente
     }
+
 
     int tempo_paciencia;
     fscanf(arquivo, "%d", &tempo_paciencia); // Lê o tempo gerado pelo cliente
@@ -96,10 +103,39 @@ void *atendimento(void *args) {
         long tempo_atual = timestamp_ms();
         int satisfeito = (tempo_atual - cliente.chegada) <= cliente.tempo_para_atendimento;
 
+        // Atualiza métricas protegidas pelo semáforo
+        sem_wait(&sem_metrics);
+        total_clientes++;
+        if (satisfeito) {
+            clientes_satisfeitos++;
+        } else {
+            clientes_insatisfeitos++;
+        }
+
+        // Calcula a taxa de satisfação e o tempo total de execução
+        float taxa_satisfacao = (total_clientes > 0) ? 
+                                ((float)clientes_satisfeitos / total_clientes) * 100 : 0.0;
+        long tempo_total_execucao = timestamp_ms() - inicio_execucao;
+        printf("--");
+        printf("Tempo atual: %ld\n", timestamp_ms());
+        printf("Tempo de chegada: %ld\n", inicio_execucao);
+        printf("--");
+        // Atualiza o arquivo de métricas
+        FILE *metrics_file = fopen("metrics.txt", "w");
+        if (metrics_file != NULL) {
+            fprintf(metrics_file, "Total de clientes: %d\n", total_clientes);
+            fprintf(metrics_file, "Clientes satisfeitos: %d\n", clientes_satisfeitos);
+            fprintf(metrics_file, "Clientes insatisfeitos: %d\n", clientes_insatisfeitos);
+            fprintf(metrics_file, "Taxa de satisfação: %.2f%%\n", taxa_satisfacao);
+            fprintf(metrics_file, "Tempo total de execução: %ld ms\n", tempo_total_execucao);
+            fclose(metrics_file);
+        }
+        sem_post(&sem_metrics);
+
         // Escreve os dados do cliente no arquivo
         FILE *arquivo = fopen(LNG_FILE, "a");
         if (arquivo != NULL) {
-            fprintf(arquivo, "------------------- Cliente %d, Satisfeito: %d\n", cliente.pid, satisfeito);
+            fprintf(arquivo, "[                                                                            ] Cliente %d, Satisfeito: %d\n", cliente.pid, satisfeito);
             fclose(arquivo);
         }
 
@@ -113,6 +149,7 @@ void *atendimento(void *args) {
         printf("SERVICE: Atendimento: Enviando sinal SIGCONT para analista de PID %d\n", pid_analista);
     }
 }
+
 
 void inspecionar_semaforo(sem_t *sem, const char *nome) {
     int valor;
@@ -141,11 +178,11 @@ void *recepcao(void *args) {
         perror("Erro ao criar semáforo /sem_block");
         exit(1);
     }
-    while (N == 0 || count < N) {
+    while (N == 0 || (N > 0 && count < N)) {
         printf("SERVICE: Recepção: Aguardando semáforo /sem_espaco\n");
         sem_wait(&sem_espaco);
         printf("SERVICE: Recepção:  Semáforo /sem_espaco informa que tem espaço\n");
-
+        inspecionar_semaforo(sem_atend, "                      -                                      /sem_atend");
         pid_t pid = fork();
         if (pid > 0) {
             printf("SERVICE: Recepção: Cliente %d criado com PID: %d\n", count+1, pid);
@@ -155,7 +192,6 @@ void *recepcao(void *args) {
             perror("Erro ao executar client");
             exit(1);
         } else if (pid > 0) {
-            
             printf("SERVICE: Recepção: Esperando semáforo /sem_atend\n");
             sem_wait(sem_atend); 
             printf("SERVICE: Recepção: Semáforo /sem_atend liberado\n");
@@ -174,7 +210,12 @@ void *recepcao(void *args) {
             sem_post(&sem_fila);
 
             sem_post(&sem_clientes);
-            count++;
+            if (N > 0){
+                count++;
+            }
+            else {
+                count = 0;
+            }
         }
     }
     pthread_exit(NULL);
@@ -200,6 +241,8 @@ int main(int argc, char *argv[]) {
     int N = atoi(argv[1]);
     srand(time(NULL));
 
+    inicio_execucao = timestamp_ms();
+
     // Remover semáforos antigos
     sem_unlink("/sem_atend");
     sem_unlink("/sem_block");
@@ -213,6 +256,7 @@ int main(int argc, char *argv[]) {
     sem_init(&sem_fila, 0, 1);
     sem_init(&sem_espaco, 0, TAM_FILA);
     sem_init(&sem_clientes, 0, 0);
+    sem_init(&sem_metrics, 0, 1);
     sem_analyst_ready = sem_open("/sem_analyst_ready", O_CREAT, 0644, 0);
 
     // Criar o processo Analista
@@ -236,6 +280,8 @@ int main(int argc, char *argv[]) {
     sem_unlink("/sem_block");
     sem_close(sem_analyst_ready);
     sem_unlink("/sem_analyst_ready");
+    sem_destroy(&sem_metrics);
+
 
     kill(pid_analista, SIGTERM); // Envia um sinal para terminar o analista
     waitpid(pid_analista, NULL, 0); // Aguarda o processo analista finalizar

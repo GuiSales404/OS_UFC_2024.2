@@ -11,33 +11,30 @@
 sem_t *sem_analyst_ready;
 
 void process_lng_file() {
-    FILE *file = fopen(LNG_FILE, "r+"); // Abre o arquivo para leitura e escrita
+    FILE *file = fopen(LNG_FILE, "r+"); 
     if (file == NULL) {
         perror("Erro ao abrir LNG");
         return;
     }
 
-    char buffer[1024]; // Buffer para armazenar a leitura do arquivo
-    char restante[1024]; // Buffer para armazenar os dados restantes
+    char buffer[1024]; 
+    char restante[1024];
     int count = 0;
 
-    restante[0] = '\0'; // Inicializa como string vazia
+    restante[0] = '\0';
 
     printf("Valores lidos do arquivo LNG:\n");
     while (fgets(buffer, sizeof(buffer), file) != NULL) {
         if (count < 10) {
-            // Imprime os primeiros 10 valores no console
             printf("%s", buffer);
             count++;
         } else {
-            // Armazena os valores restantes no buffer
             strcat(restante, buffer);
         }
     }
 
-    // Trunca o arquivo e grava os valores restantes
-    freopen(LNG_FILE, "w", file); // Reabre o arquivo para truncar
-    fprintf(file, "%s", restante); // Escreve apenas os valores restantes
+    freopen(LNG_FILE, "w", file); 
+    fprintf(file, "%s", restante); 
     fclose(file);
 }
 
@@ -51,7 +48,7 @@ int main() {
     sem_analyst_ready = sem_open("/sem_analyst_ready", O_CREAT, 0644, 0);
 
     signal(SIGCONT, handle_signal);
-    // Escreve o PID do processo analista
+
     printf("ANALYST: Processo Analista iniciado. PID: %d\n", getpid());
 
     // Cria ou abre o semáforo \sem_block
@@ -66,10 +63,9 @@ int main() {
         exit(1);
     }
     while (1) {
-        // Dorme até ser acordado
         printf("ANALYST: Analista dormindo...\n");
 
-        raise(SIGSTOP); // Parando aqui
+        raise(SIGSTOP); 
         printf("ANALYST: Analista recebeu um sinal. Desbloqueando...\n");
 
         printf("ANALYST: Antes de bloquear sem_block\n");
@@ -82,7 +78,6 @@ int main() {
         printf("ANALYST: Semáforo sem_block liberado\n");
 
 
-        // Volta a dormir
         printf("ANALYST: Analista voltou a dormir...\n");
     }
 
