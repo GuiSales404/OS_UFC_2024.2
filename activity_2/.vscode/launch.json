@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "/Users/guisalesfer/OS_UFC_2024.2/activity_2",
+      "program": "/Users/guisalesfer/OS_UFC_2024.2/activity_2/build/Debug/outDebug"
+    }
+  ]
+}
