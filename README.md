@@ -61,6 +61,11 @@ The goal of this assignment is to develop a multithreaded program that simulates
 
 ## **Activity 2 - Mini System with Custom Memory Management and File System**
 
+Disponibilizar HugePages
+```bash
+sudo sysctl -w vm.nr_hugepages=102400
+```
+
 ### **Objective:**
 Develop a mini operating system that includes a **custom file system** and **memory management system** with support for paging during sorting operations.
 
